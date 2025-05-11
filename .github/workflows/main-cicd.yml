@@ -8,8 +8,8 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: accounting
-  IMAGE_NAME: accounting
+  ECR_REPOSITORY: cart
+  IMAGE_NAME: cart
 
 jobs:
   build-and-test:
@@ -32,80 +32,32 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
     
-
-      - name: Build image accounting
-        id: build-image-accounting
+      - name: Build image cart
+        id: build-image-cart
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: "latest"
-          ECR_REPOSITORY_ACCOUNTING: "accounting"
+          ECR_REPOSITORY_CART: "cart"
         run: |
-          # Build a docker container and
-          # push it to ECR so that it can
-          # be deployed to ECS.
-          cd src/accounting
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_ACCOUNTING:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY_ACCOUNTING:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY_ACCOUNTING:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          cd src/cart
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_CART:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_CART:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY_CART:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Run Node.js service tests
+      - name: Run cart service tests
         run: |
-          echo "Running Node.js service tests..."
-          cd src/payment && npm install && npm test || true
-          cd src/email && npm install && npm test || true
-          cd src/currency && npm install && npm test || true
-
-      - name: Run Go service tests
-        run: |
-          echo "Running Go service tests..."
-          cd src/product-catalog && go test ./... || true
-          cd src/shipping && go test ./... || true
-          cd src/recommendation && go test ./... || true
-
-      - name: Run Java service tests
-        run: |
-          echo "Running Java service tests..."
-          cd src/ad && ./gradlew test || true
-          cd src/fraud-detection && ./gradlew test || true
-
-      - name: Run frontend tests
-        run: |
-          echo "Running frontend tests..."
-          cd src/frontend && npm install && npm test || true
-          cd src/frontend && npm run cypress:run || true
-
-      - name: Run React Native tests
-        run: |
-          echo "Running React Native tests..."
-          cd src/react-native-app && npm install && npm test || true
+          echo "Running cart service tests..."
+          cd src/cart && npm install && npm test || true
 
       - name: Run security scans
         run: |
           echo "Running security scans..."
-          # Run npm audit for Node.js services
-          find src -name "package.json" -execdir npm audit --production \; || true
-          
-          # Run OWASP dependency check for Java services
-          find src -name "build.gradle" -execdir ./gradlew dependencyCheckAnalyze \; || true
-          
-          # Run Go security checks
-          find src -name "go.mod" -execdir go list -json -m all | nancy sleuth \; || true
+          cd src/cart && npm audit --production || true
 
   deploy:
     needs: build-and-test
@@ -125,24 +77,18 @@ jobs:
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }}
 
-      - name: Deploy accounting service
+      - name: Deploy cart service
         run: |
-          # Store the current deployment version for rollback
-          CURRENT_VERSION=$(kubectl get deployment accounting -o=jsonpath='{.spec.template.spec.containers[0].image}' | cut -d':' -f2)
+          CURRENT_VERSION=$(kubectl get deployment cart -o=jsonpath='{.spec.template.spec.containers[0].image}' | cut -d':' -f2)
           echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
-          
-          # Deploy new version of accounting service
-          kubectl set image deployment/accounting accounting=${{ steps.login-ecr.outputs.registry }}/accounting:latest
-          
-          # Wait for deployment to complete
-          kubectl rollout status deployment/accounting --timeout=300s
+          kubectl set image deployment/cart cart=${{ steps.login-ecr.outputs.registry }}/cart:latest
+          kubectl rollout status deployment/cart --timeout=300s
 
-      - name: Verify accounting deployment
+      - name: Verify cart deployment
         run: |
-          echo "Verifying accounting service deployment..."
-          # Check accounting service health endpoint
-          kubectl wait --for=condition=available --timeout=300s deployment/accounting
-          echo "Accounting service deployment verified successfully"
+          echo "Verifying cart service deployment..."
+          kubectl wait --for=condition=available --timeout=300s deployment/cart
+          echo "Cart service deployment verified successfully"
 
   rollback:
     needs: deploy
@@ -163,26 +109,22 @@ jobs:
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }}
 
-      - name: Rollback accounting service
+      - name: Rollback cart service
         run: |
-          echo "Rolling back accounting service to previous version..."
-          # Rollback to previous version
-          kubectl rollout undo deployment/accounting
-          
-          # Wait for rollback to complete
-          kubectl rollout status deployment/accounting --timeout=300s
+          echo "Rolling back cart service to previous version..."
+          kubectl rollout undo deployment/cart
+          kubectl rollout status deployment/cart --timeout=300s
 
       - name: Verify rollback
         run: |
-          echo "Verifying accounting service rollback..."
-          # Check accounting service health endpoint
-          kubectl wait --for=condition=available --timeout=300s deployment/accounting
-          echo "Accounting service rollback verified successfully"
+          echo "Verifying cart service rollback..."
+          kubectl wait --for=condition=available --timeout=300s deployment/cart
+          echo "Cart service rollback verified successfully"
 
       - name: Notify rollback
         if: always()
         run: |
-          echo "Accounting service deployment failed and was rolled back to version ${{ env.CURRENT_VERSION }}"
+          echo "Cart service deployment failed and was rolled back to version ${{ env.CURRENT_VERSION }}"
           # Add notification logic here (e.g., Slack, email)
           # Example Slack notification:
-          # curl -X POST -H 'Content-type: application/json' --data '{"text":"Accounting service deployment failed and was rolled back"}' ${{ secrets.SLACK_WEBHOOK_URL }} 
+          # curl -X POST -H 'Content-type: application/json' --data '{"text":"Cart service deployment failed and was rolled back"}' ${{ secrets.SLACK_WEBHOOK_URL }} 
