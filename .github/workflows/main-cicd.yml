@@ -39,8 +39,7 @@ jobs:
           IMAGE_TAG: "latest"
           ECR_REPOSITORY_CART: "cart"
         run: |
-          cd src/cart
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_CART:$IMAGE_TAG .
+          docker build -f src/cart/src/Dockerfile -t $ECR_REGISTRY/$ECR_REPOSITORY_CART:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY_CART:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY_CART:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
