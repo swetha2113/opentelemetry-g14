@@ -8,38 +8,45 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: opentelemetry-demo
+  ECR_REPOSITORY: g14
   IMAGE_NAME: ${{ env.ECR_REPOSITORY }}
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout repository and submodules
         uses: actions/checkout@v4
+        with:
+            submodules: true               # This is required to checkout submodules
+            token: ${{ secrets.ACCESS_TOKEN }}  # Using the personal access token for authentication
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@v1
+    
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Docker images
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build image accounting
+        id: build-image-accounting
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: "latest"
+          ECR_REPOSITORY_ACCOUNTING: "accounting"
+        run: |
+          # Build a docker container and
+          # push it to ECR so that it can
+          # be deployed to ECS.
+          cd src/accounting
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_ACCOUNTING:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_ACCOUNTING:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY_ACCOUNTING:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -102,7 +109,6 @@ jobs:
 
   deploy:
     needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -119,27 +125,24 @@ jobs:
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }}
 
-      - name: Deploy to Kubernetes
+      - name: Deploy accounting service
         run: |
           # Store the current deployment version for rollback
-          CURRENT_VERSION=$(kubectl get deployment opentelemetry-demo -o=jsonpath='{.spec.template.spec.containers[0].image}' | cut -d':' -f2)
+          CURRENT_VERSION=$(kubectl get deployment accounting -o=jsonpath='{.spec.template.spec.containers[0].image}' | cut -d':' -f2)
           echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
           
-          # Deploy new version
-          kubectl set image deployment/opentelemetry-demo opentelemetry-demo=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          # Deploy new version of accounting service
+          kubectl set image deployment/accounting accounting=${{ steps.login-ecr.outputs.registry }}/accounting:latest
           
           # Wait for deployment to complete
-          kubectl rollout status deployment/opentelemetry-demo --timeout=300s
+          kubectl rollout status deployment/accounting --timeout=300s
 
-      - name: Verify deployment
+      - name: Verify accounting deployment
         run: |
-          # Add health check commands here
-          echo "Verifying deployment..."
-          # Check all service health endpoints
-          for service in frontend payment email currency product-catalog shipping recommendation ad fraud-detection; do
-            echo "Checking $service health..."
-            curl -f http://$service:8080/health || true
-          done
+          echo "Verifying accounting service deployment..."
+          # Check accounting service health endpoint
+          kubectl wait --for=condition=available --timeout=300s deployment/accounting
+          echo "Accounting service deployment verified successfully"
 
   rollback:
     needs: deploy
@@ -155,26 +158,31 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }}
 
-      - name: Rollback deployment
+      - name: Rollback accounting service
         run: |
+          echo "Rolling back accounting service to previous version..."
           # Rollback to previous version
-          kubectl rollout undo deployment/opentelemetry-demo
+          kubectl rollout undo deployment/accounting
           
           # Wait for rollback to complete
-          kubectl rollout status deployment/opentelemetry-demo --timeout=300s
+          kubectl rollout status deployment/accounting --timeout=300s
 
       - name: Verify rollback
         run: |
-          # Add health check commands here
-          echo "Verifying rollback..."
+          echo "Verifying accounting service rollback..."
+          # Check accounting service health endpoint
+          kubectl wait --for=condition=available --timeout=300s deployment/accounting
+          echo "Accounting service rollback verified successfully"
 
       - name: Notify rollback
         if: always()
         run: |
-          echo "Deployment failed and was rolled back to version ${{ env.CURRENT_VERSION }}"
-          # Add notification logic here (e.g., Slack, email) 
+          echo "Accounting service deployment failed and was rolled back to version ${{ env.CURRENT_VERSION }}"
+          # Add notification logic here (e.g., Slack, email)
+          # Example Slack notification:
+          # curl -X POST -H 'Content-type: application/json' --data '{"text":"Accounting service deployment failed and was rolled back"}' ${{ secrets.SLACK_WEBHOOK_URL }} 
