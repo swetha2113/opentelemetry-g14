@@ -78,15 +78,15 @@ jobs:
 
       - name: Deploy cart service
         run: |
-          CURRENT_VERSION=$(kubectl get deployment cart -o=jsonpath='{.spec.template.spec.containers[0].image}' | cut -d':' -f2)
+          CURRENT_VERSION=$(kubectl get deployment cart -n otel-demo -o=jsonpath='{.spec.template.spec.containers[0].image}' | cut -d':' -f2 || echo "none")
           echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
-          kubectl set image deployment/cart cart=${{ steps.login-ecr.outputs.registry }}/cart:latest
-          kubectl rollout status deployment/cart --timeout=300s
+          kubectl set image deployment/cart cart=${{ steps.login-ecr.outputs.registry }}/cart:latest -n otel-demo
+          kubectl rollout status deployment/cart -n otel-demo --timeout=300s
 
       - name: Verify cart deployment
         run: |
           echo "Verifying cart service deployment..."
-          kubectl wait --for=condition=available --timeout=300s deployment/cart
+          kubectl wait --for=condition=available --timeout=300s deployment/cart -n otel-demo
           echo "Cart service deployment verified successfully"
 
   rollback:
@@ -111,13 +111,13 @@ jobs:
       - name: Rollback cart service
         run: |
           echo "Rolling back cart service to previous version..."
-          kubectl rollout undo deployment/cart
-          kubectl rollout status deployment/cart --timeout=300s
+          kubectl rollout undo deployment/cart -n otel-demo
+          kubectl rollout status deployment/cart -n otel-demo --timeout=300s
 
       - name: Verify rollback
         run: |
           echo "Verifying cart service rollback..."
-          kubectl wait --for=condition=available --timeout=300s deployment/cart
+          kubectl wait --for=condition=available --timeout=300s deployment/cart -n otel-demo
           echo "Cart service rollback verified successfully"
 
       - name: Notify rollback
