@@ -11470,7 +11470,7 @@ spec:
       serviceAccountName: opentelemetry-demo
       containers:
         - name: cart
-          image: 'ghcr.io/open-telemetry/demo:2.0.2-cart'
+          image: '905418036844.dkr.ecr.us-east-1.amazonaws.com/cart:latest'
           imagePullPolicy: IfNotPresent
           ports:
             
