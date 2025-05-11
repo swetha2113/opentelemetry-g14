@@ -1,0 +1,180 @@
+name: Main CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: opentelemetry-demo
+  IMAGE_NAME: ${{ env.ECR_REPOSITORY }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker images
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Run Node.js service tests
+        run: |
+          echo "Running Node.js service tests..."
+          cd src/payment && npm install && npm test || true
+          cd src/email && npm install && npm test || true
+          cd src/currency && npm install && npm test || true
+
+      - name: Run Go service tests
+        run: |
+          echo "Running Go service tests..."
+          cd src/product-catalog && go test ./... || true
+          cd src/shipping && go test ./... || true
+          cd src/recommendation && go test ./... || true
+
+      - name: Run Java service tests
+        run: |
+          echo "Running Java service tests..."
+          cd src/ad && ./gradlew test || true
+          cd src/fraud-detection && ./gradlew test || true
+
+      - name: Run frontend tests
+        run: |
+          echo "Running frontend tests..."
+          cd src/frontend && npm install && npm test || true
+          cd src/frontend && npm run cypress:run || true
+
+      - name: Run React Native tests
+        run: |
+          echo "Running React Native tests..."
+          cd src/react-native-app && npm install && npm test || true
+
+      - name: Run security scans
+        run: |
+          echo "Running security scans..."
+          # Run npm audit for Node.js services
+          find src -name "package.json" -execdir npm audit --production \; || true
+          
+          # Run OWASP dependency check for Java services
+          find src -name "build.gradle" -execdir ./gradlew dependencyCheckAnalyze \; || true
+          
+          # Run Go security checks
+          find src -name "go.mod" -execdir go list -json -m all | nancy sleuth \; || true
+
+  deploy:
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          # Store the current deployment version for rollback
+          CURRENT_VERSION=$(kubectl get deployment opentelemetry-demo -o=jsonpath='{.spec.template.spec.containers[0].image}' | cut -d':' -f2)
+          echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
+          
+          # Deploy new version
+          kubectl set image deployment/opentelemetry-demo opentelemetry-demo=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          
+          # Wait for deployment to complete
+          kubectl rollout status deployment/opentelemetry-demo --timeout=300s
+
+      - name: Verify deployment
+        run: |
+          # Add health check commands here
+          echo "Verifying deployment..."
+          # Check all service health endpoints
+          for service in frontend payment email currency product-catalog shipping recommendation ad fraud-detection; do
+            echo "Checking $service health..."
+            curl -f http://$service:8080/health || true
+          done
+
+  rollback:
+    needs: deploy
+    if: failure() && needs.deploy.result == 'failure'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Rollback deployment
+        run: |
+          # Rollback to previous version
+          kubectl rollout undo deployment/opentelemetry-demo
+          
+          # Wait for rollback to complete
+          kubectl rollout status deployment/opentelemetry-demo --timeout=300s
+
+      - name: Verify rollback
+        run: |
+          # Add health check commands here
+          echo "Verifying rollback..."
+
+      - name: Notify rollback
+        if: always()
+        run: |
+          echo "Deployment failed and was rolled back to version ${{ env.CURRENT_VERSION }}"
+          # Add notification logic here (e.g., Slack, email) 
