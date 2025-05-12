@@ -14,6 +14,8 @@ env:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    outputs:
+      ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -62,9 +64,9 @@ jobs:
 
       - name: Deploy to EKS
         env:
-          ECR_REGISTRY: ${{ needs.build-and-test.outputs.ECR_REGISTRY || '' }}
+          ECR_REGISTRY: ${{ needs.build-and-test.outputs.ECR_REGISTRY }}
         run: |
-          kubectl set image deployment/cart cart=${{ steps.login-ecr.outputs.registry }}/cart:latest -n otel-demo
+          kubectl set image deployment/cart cart=$ECR_REGISTRY/cart:latest -n otel-demo
           kubectl rollout status deployment/cart -n otel-demo --timeout=300s
 
       - name: Verify cart deployment
