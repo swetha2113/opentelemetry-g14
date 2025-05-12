@@ -1,0 +1,48 @@
+name: Rollback Cart Deployment
+
+on:
+  workflow_run:
+    workflows: ["Cart CI/CD Pipeline"]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  rollback:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Rollback cart deployment
+        run: |
+          echo "Rolling back cart deployment in otel-demo namespace..."
+          kubectl rollout undo deployment/cart -n otel-demo
+          kubectl rollout status deployment/cart -n otel-demo --timeout=300s
+
+      - name: Verify rollback
+        run: |
+          echo "Verifying cart service rollback..."
+          kubectl wait --for=condition=available --timeout=300s deployment/cart -n otel-demo
+          echo "Cart service rollback verified successfully"
+
+      - name: Notify rollback
+        if: always()
+        run: |
+          echo "Cart service deployment failed and was rolled back."
+          # Add notification logic here (e.g., Slack, email)
+          # Example Slack notification:
+          # curl -X POST -H 'Content-type: application/json' --data '{"text":"Cart service deployment failed and was rolled back"}' ${{ secrets.SLACK_WEBHOOK_URL }} 
