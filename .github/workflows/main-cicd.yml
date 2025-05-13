@@ -8,7 +8,6 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: 905418036844.dkr.ecr.us-east-1.amazonaws.com/cart
   IMAGE_NAME: cart
 
 jobs:
@@ -66,9 +65,9 @@ jobs:
         env:
           ECR_REGISTRY: ${{ needs.build-and-test.outputs.ECR_REGISTRY }}
         run: |
+          # IMPORTANT: Ensure your cart deployment manifest does not have a hardcoded image like /cart:latest or cart:latest
           kubectl set image deployment/cart cart=$ECR_REGISTRY/cart:latest -n otel-demo
           kubectl rollout status deployment/cart -n otel-demo --timeout=300s
-
       - name: Verify cart deployment
         run: |
           echo "Verifying cart service deployment..."
@@ -92,7 +91,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }}
+        run: aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
 
       - name: Rollback cart service
         run: |
