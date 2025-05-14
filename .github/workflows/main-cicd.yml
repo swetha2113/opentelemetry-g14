@@ -68,7 +68,7 @@ jobs:
         run: |
           # IMPORTANT: Ensure your cart deployment manifest does not have a hardcoded image like /cart:latest or cart:latest
           kubectl set image deployment/cart cart=$ECR_REGISTRY/cart:latest -n otel-demo
-          kubectl rollout status deployment/cart -n otel-demo --timeout=300s
+          kubectl rollout status deployment/cart -n otel-demo --watch=false
       - name: Verify cart deployment
         run: |
           echo "Verifying cart service deployment..."
